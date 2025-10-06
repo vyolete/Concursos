@@ -1,5 +1,11 @@
+import gspread
+from datetime import datetime
+import random
+import string
+import smtplib
+from email.message import EmailMessage
 import streamlit as st
-from utils import gen_code, add_or_update_user, find_user, send_code_email, set_verified
+
 
 st.set_page_config(page_title="Auth con Google Sheets", layout="centered")
 
