@@ -5,20 +5,23 @@ from google.oauth2.service_account import Credentials
 from passlib.hash import pbkdf2_sha256
 from email.mime.text import MIMEText
 from googleapiclient.discovery import build
+import base64
 import random
 import string
-import base64
 
-# ======================================================
+# ===============================
 # CONFIGURACIÓN GOOGLE SHEETS
-# ======================================================
-credentials = Credentials.from_service_account_info(st.secrets["gcp"])
-gc = gspread.authorize(credentials)
-sheet = gc.open("registro_usuarios").sheet1  # Nombre de tu hoja
+# ===============================
+gcp_creds = st.secrets["gcp"]
+spreadsheet_id = st.secrets["spreadsheet"]["id"]
 
-# ======================================================
+credentials = Credentials.from_service_account_info(gcp_creds)
+gc = gspread.authorize(credentials)
+sheet = gc.open_by_key(spreadsheet_id).sheet1  # Abrir por ID evita problemas de nombres
+
+# ===============================
 # FUNCIONES AUXILIARES
-# ======================================================
+# ===============================
 def generar_codigo(longitud=8):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=longitud))
 
@@ -40,22 +43,25 @@ def guardar_usuario(nombre, correo, contraseña_hash):
 
 def correo_existe(correo):
     usuarios = obtener_usuarios()
-    return correo in usuarios["Correo"].values
+    return correo in usuarios["Correo"].values if not usuarios.empty else False
 
 def autenticar_usuario(correo, contraseña):
     usuarios = obtener_usuarios()
-    if correo in usuarios["Correo"].values:
+    if not usuarios.empty and correo in usuarios["Correo"].values:
         user = usuarios[usuarios["Correo"] == correo].iloc[0]
         return pbkdf2_sha256.verify(contraseña, user["Contraseña"])
     return False
 
-# ======================================================
+# ===============================
 # INTERFAZ STREAMLIT
-# ======================================================
+# ===============================
 st.title("🔐 Sistema de Registro y Acceso ITM")
 
 modo = st.sidebar.radio("Selecciona una opción", ["Registro", "Iniciar sesión", "Recuperar contraseña"])
 
+# -----------------------
+# Registro
+# -----------------------
 if modo == "Registro":
     st.subheader("📝 Registro de nuevo usuario")
     nombre = st.text_input("Nombre completo")
@@ -74,6 +80,9 @@ if modo == "Registro":
             )
             st.success("✅ Registro completado. Se envió un correo de confirmación.")
 
+# -----------------------
+# Login
+# -----------------------
 elif modo == "Iniciar sesión":
     st.subheader("🔑 Iniciar sesión")
     correo = st.text_input("Correo institucional")
@@ -82,12 +91,15 @@ elif modo == "Iniciar sesión":
         if autenticar_usuario(correo, contraseña):
             st.success("Bienvenido al sistema 🎉")
         else:
-            st.error("❌ Credenciales incorrectas.")
+            st.error("❌ Credenciales incorrectas o correo no registrado.")
 
-else:  # Recuperar contraseña
+# -----------------------
+# Recuperar contraseña
+# -----------------------
+else:
     st.subheader("🔄 Recuperar contraseña")
     correo = st.text_input("Correo registrado")
-    if st.button("Enviar enlace de recuperación"):
+    if st.button("Enviar código temporal"):
         if correo_existe(correo):
             token = generar_codigo()
             enviar_correo(
