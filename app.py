@@ -1,227 +1,100 @@
-# This is a sample Python script.
 import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from passlib.hash import pbkdf2_sha256
-import smtplib
 from email.mime.text import MIMEText
-import random, string
+from googleapiclient.discovery import build
+import random
+import string
+import base64
 
-# ==========================
-# CONFIGURACIÓN SECRETS
-# ==========================
-# Gmail
-GMAIL_USER = st.secrets["gmail"]["user"]
-GMAIL_APP_PASSWORD = st.secrets["gmail"]["app_password"]
+# ======================================================
+# CONFIGURACIÓN GOOGLE SHEETS
+# ======================================================
+credentials = Credentials.from_service_account_info(st.secrets["gcp"])
+gc = gspread.authorize(credentials)
+sheet = gc.open("registro_usuarios").sheet1  # Nombre de tu hoja
 
-# Google Sheets
-gcp_creds = st.secrets["gcp"]
-spreadsheet_id = st.secrets["spreadsheet"]["id"]
-
-credentials_dict = {
-    "type": gcp_creds["type"],
-    "project_id": gcp_creds["project_id"],
-    "private_key_id": gcp_creds["private_key_id"],
-    "private_key": gcp_creds["private_key"],
-    "client_email": gcp_creds["client_email"],
-    "client_id": gcp_creds["client_id"],
-    "auth_uri": gcp_creds["auth_uri"],
-    "token_uri": gcp_creds["token_uri"],
-    "auth_provider_x509_cert_url": gcp_creds["auth_provider_x509_cert_url"],
-    "client_x509_cert_url": gcp_creds["client_x509_cert_url"],
-    "universe_domain": gcp_creds["universe_domain"]
-}
-
-scope = ["https://www.googleapis.com/auth/spreadsheets",
-         "https://www.googleapis.com/auth/drive"]
-
-creds = Credentials.from_service_account_info(credentials_dict, scopes=scope)
-client = gspread.authorize(creds)
-sheet = client.open_by_key(spreadsheet_id).sheet1  # Primera hoja
-
-# ==========================
-# FUNCIONES
-# ==========================
-def obtener_usuarios():
-    data = sheet.get_all_records()
-    df = pd.DataFrame(data)
-    if not df.empty:
-        return df
-    else:
-        return pd.DataFrame(columns=["email", "nombre", "password", "rol"])
-
-def validar_correo_institucional(email):
-    return email.endswith("@itm.edu.co")
-
-def generar_contraseña_temporal(longitud=8):
-    caracteres = string.ascii_letters + string.digits
-    return ''.join(random.choice(caracteres) for _ in range(longitud))
+# ======================================================
+# FUNCIONES AUXILIARES
+# ======================================================
+def generar_codigo(longitud=8):
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=longitud))
 
 def enviar_correo(destinatario, asunto, mensaje):
-    msg = MIMEText(mensaje, "plain")
-    msg["Subject"] = asunto
-    msg["From"] = GMAIL_USER
-    msg["To"] = destinatario
-    try:
-        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
-        server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-        server.sendmail(GMAIL_USER, destinatario, msg.as_string())
-        server.quit()
-        return True
-    except Exception as e:
-        st.error(f"No se pudo enviar el correo: {e}")
-        return False
+    service = build('gmail', 'v1', credentials=credentials)
+    mime_message = MIMEText(mensaje, "plain")
+    mime_message["to"] = destinatario
+    mime_message["subject"] = asunto
+    raw_message = base64.urlsafe_b64encode(mime_message.as_bytes()).decode()
+    message = {'raw': raw_message}
+    service.users().messages().send(userId="me", body=message).execute()
 
-# --------------------------
-# CRUD de usuarios
-# --------------------------
-def registrar_usuario(email, nombre, password, rol):
-    if not validar_correo_institucional(email):
-        st.error("⚠ Solo se permiten correos institucionales.")
-        return False
+def obtener_usuarios():
+    registros = sheet.get_all_records()
+    return pd.DataFrame(registros)
+
+def guardar_usuario(nombre, correo, contraseña_hash):
+    sheet.append_row([nombre, correo, contraseña_hash])
+
+def correo_existe(correo):
     usuarios = obtener_usuarios()
-    if email in usuarios['email'].values:
-        st.error("⚠ Este usuario ya está registrado.")
-        return False
-    hashed_password = pbkdf2_sha256.hash(password)
-    sheet.append_row([email, nombre, hashed_password, rol])
-    st.success(f"✅ Usuario registrado correctamente como {rol}.")
-    asunto = "Registro en Sistema Concurso ITM"
-    mensaje = f"Hola {nombre},\n\nTu cuenta ha sido creada correctamente.\nCorreo: {email}\nRol: {rol}\n\nGracias."
-    enviar_correo(email, asunto, mensaje)
-    return True
+    return correo in usuarios["Correo"].values
 
-def autenticar_usuario(email, password):
-    if not validar_correo_institucional(email):
-        return False, None, None
+def autenticar_usuario(correo, contraseña):
     usuarios = obtener_usuarios()
-    if email in usuarios['email'].values:
-        usuario = usuarios[usuarios['email'] == email].iloc[0]
-        if pbkdf2_sha256.verify(password, usuario['password']):
-            return True, usuario['nombre'], usuario['rol']
-    return False, None, None
+    if correo in usuarios["Correo"].values:
+        user = usuarios[usuarios["Correo"] == correo].iloc[0]
+        return pbkdf2_sha256.verify(contraseña, user["Contraseña"])
+    return False
 
-def actualizar_usuario(email, nombre=None, password=None, rol=None):
-    cell = sheet.find(email)
-    row = cell.row
-    if nombre:
-        sheet.update_cell(row, 2, nombre)
-    if password:
-        hashed_password = pbkdf2_sha256.hash(password)
-        sheet.update_cell(row, 3, hashed_password)
-    if rol:
-        sheet.update_cell(row, 4, rol)
-
-def eliminar_usuario(email):
-    cell = sheet.find(email)
-    sheet.delete_row(cell.row)
-
-def recuperar_contraseña(email):
-    usuarios = obtener_usuarios()
-    if email not in usuarios['email'].values:
-        st.error("Correo no registrado.")
-        return
-    nueva_pass = generar_contraseña_temporal()
-    actualizar_usuario(email, password=nueva_pass)
-    asunto = "Recuperación de contraseña - Concurso ITM"
-    mensaje = f"Hola,\n\nTu nueva contraseña temporal es: {nueva_pass}\nPor favor ingresa y cámbiala.\n\nGracias."
-    enviar_correo(email, asunto, mensaje)
-    st.success("Se ha enviado una nueva contraseña temporal a tu correo.")
-
-# ==========================
-# SESIÓN
-# ==========================
-if 'login' not in st.session_state:
-    st.session_state.login = False
-    st.session_state.usuario = ""
-    st.session_state.rol = ""
-
-# ==========================
+# ======================================================
 # INTERFAZ STREAMLIT
-# ==========================
-st.title("🔐 Sistema Concurso ITM - PRO")
+# ======================================================
+st.title("🔐 Sistema de Registro y Acceso ITM")
 
-# Recuperación de contraseña
-st.sidebar.subheader("¿Olvidaste tu contraseña?")
-email_recuperar = st.sidebar.text_input("Correo institucional", key="recuperar")
-if st.sidebar.button("Recuperar contraseña"):
-    recuperar_contraseña(email_recuperar)
+modo = st.sidebar.radio("Selecciona una opción", ["Registro", "Iniciar sesión", "Recuperar contraseña"])
 
-menu = st.sidebar.selectbox("Menú", ["Login", "Registro"])
-
-# Registro
-if menu == "Registro":
-    st.subheader("📝 Crea una cuenta")
-    email = st.text_input("Correo institucional")
+if modo == "Registro":
+    st.subheader("📝 Registro de nuevo usuario")
     nombre = st.text_input("Nombre completo")
-    password = st.text_input("Contraseña", type="password")
-    rol = st.radio("Selecciona tu rol:", ["Estudiante", "Docente"])
+    correo = st.text_input("Correo institucional")
+    contraseña = st.text_input("Contraseña", type="password")
     if st.button("Registrar"):
-        registrar_usuario(email, nombre, password, rol)
-
-# Login
-elif menu == "Login":
-    st.subheader("🔑 Ingresa a tu cuenta")
-    email = st.text_input("Correo institucional", key="login_email")
-    password = st.text_input("Contraseña", type="password", key="login_pass")
-    if st.button("Ingresar"):
-        valido, nombre_usuario, rol_usuario = autenticar_usuario(email, password)
-        if valido:
-            st.session_state.login = True
-            st.session_state.usuario = nombre_usuario
-            st.session_state.rol = rol_usuario
-            st.success(f"Bienvenido {nombre_usuario} ({rol_usuario})")
+        if correo_existe(correo):
+            st.warning("⚠️ Este correo ya está registrado.")
         else:
-            st.error("❌ Correo o contraseña incorrectos o no institucional.")
+            hash_pass = pbkdf2_sha256.hash(contraseña)
+            guardar_usuario(nombre, correo, hash_pass)
+            enviar_correo(
+                correo,
+                "Registro exitoso - Concurso ITM",
+                f"Hola {nombre}, tu registro en el sistema fue exitoso."
+            )
+            st.success("✅ Registro completado. Se envió un correo de confirmación.")
 
-# --------------------------
-# Panel de usuario logueado
-# --------------------------
-if st.session_state.login:
-    st.write(f"🎉 Hola, {st.session_state.usuario} ({st.session_state.rol})!")
-
-    # Panel docente
-    if st.session_state.rol == "Docente":
-        st.info("📚 Panel administrativo de usuarios")
-        df = obtener_usuarios()
-        if not df.empty:
-            filtro_rol = st.selectbox("Filtrar por rol", ["Todos", "Estudiante", "Docente"])
-            buscar = st.text_input("Buscar por nombre o correo", key="buscar_docente")
-            df_filtrado = df.copy()
-            if filtro_rol != "Todos":
-                df_filtrado = df_filtrado[df_filtrado['rol'] == filtro_rol]
-            if buscar:
-                df_filtrado = df_filtrado[df_filtrado['nombre'].str.contains(buscar, case=False) |
-                                          df_filtrado['email'].str.contains(buscar, case=False)]
-            df_display = df_filtrado.drop(columns=["password"])
-            st.dataframe(df_display)
-
-            selected_email = st.selectbox("Selecciona un usuario para editar/eliminar", df_filtrado['email'])
-            usuario = df_filtrado[df_filtrado['email'] == selected_email].iloc[0]
-
-            with st.expander(f"Editar usuario: {usuario['nombre']}"):
-                nuevo_nombre = st.text_input("Nombre", value=usuario['nombre'])
-                nuevo_rol = st.radio("Rol", ["Estudiante", "Docente"], index=0 if usuario['rol']=="Estudiante" else 1)
-                nueva_pass = st.text_input("Nueva contraseña (opcional)", type="password")
-                if st.button("Guardar cambios"):
-                    actualizar_usuario(selected_email, nombre=nuevo_nombre, rol=nuevo_rol, password=nueva_pass if nueva_pass else None)
-                    st.success("Usuario actualizado correctamente.")
-                    st.experimental_rerun()
-                if st.button("Eliminar usuario"):
-                    eliminar_usuario(selected_email)
-                    st.warning(f"Usuario {selected_email} eliminado.")
-                    st.experimental_rerun()
+elif modo == "Iniciar sesión":
+    st.subheader("🔑 Iniciar sesión")
+    correo = st.text_input("Correo institucional")
+    contraseña = st.text_input("Contraseña", type="password")
+    if st.button("Acceder"):
+        if autenticar_usuario(correo, contraseña):
+            st.success("Bienvenido al sistema 🎉")
         else:
-            st.info("No hay usuarios registrados aún.")
+            st.error("❌ Credenciales incorrectas.")
 
-    # Panel estudiante
-    elif st.session_state.rol == "Estudiante":
-        st.info("👨‍🎓 Panel exclusivo para estudiantes")
-        st.write("Aquí puedes acceder a tus recursos y ver tus actividades.")
-
-    if st.button("Cerrar sesión"):
-        st.session_state.login = False
-        st.session_state.usuario = ""
-        st.session_state.rol = ""
-        st.success("Has cerrado sesión correctamente.")
+else:  # Recuperar contraseña
+    st.subheader("🔄 Recuperar contraseña")
+    correo = st.text_input("Correo registrado")
+    if st.button("Enviar enlace de recuperación"):
+        if correo_existe(correo):
+            token = generar_codigo()
+            enviar_correo(
+                correo,
+                "Recuperación de contraseña - Concurso ITM",
+                f"Utiliza este código temporal para restablecer tu contraseña: {token}"
+            )
+            st.info("📩 Se envió un correo con tu código temporal.")
+        else:
+            st.warning("⚠️ Este correo no está registrado.")
