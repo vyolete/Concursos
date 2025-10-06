@@ -1,7 +1,7 @@
 import streamlit as st
 from vistas.login import mostrar_vista_login
 from vistas.registro import mostrar_vista_registro
-from vistas.app import mostrar_vista_app_principal
+from vistas.app import mostrar_vista_app
 
 def main():
     st.set_page_config(page_title="Mi App Modular", layout="wide")
