@@ -12,7 +12,7 @@ def main():
 
     # Si el usuario ha iniciado sesión, mostrar la aplicación principal
     if st.session_state['logged_in']:
-        mostrar_vista_app_principal()
+        mostrar_vista_app()
     else:
         # Si no, mostrar las opciones de login/registro en la barra lateral
         st.sidebar.title("Navegación")
