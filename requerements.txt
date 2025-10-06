@@ -1,0 +1,8 @@
+streamlit
+gspread
+pandas
+google-auth
+passlib
+smtplib2
+email-validator
+altair
