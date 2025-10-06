@@ -2,6 +2,7 @@ import streamlit as st
 from modulos.autenticacion import login_usuario
 
 def mostrar_vista_login():
+    st.markdown("<h2 style='color:#1B396A;'>🔐 Acceso al Sistema del Concurso ITM</h2>", unsafe_allow_html=True)
     st.title("Inicio de Sesión")
 
     with st.form("formulario_login"):
